@@ -36,11 +36,21 @@ class ProblemDefinitionError(Exception):
 
 
 class SA():
-    
-    def __init__(self, time_mtrx, actual_list, expected_list, station_capacity, truck_capacity, 
+    def __init__(self, 
+                 time_mtrx, 
+                 actual_list, 
+                 expected_list, 
+                 station_capacity, 
+                 truck_capacity, 
                  time_limit = 1000,
-                 temp_schedule=100, K=100, alpha=0.99, iter_max=1000, temp=100, tolerance=500, 
+                 temp_schedule=100, 
+                 K=100, 
+                 alpha=0.99, 
+                 iter_max=1000, 
+                 temp=100, 
+                 tolerance=500, 
                  punish_do_nothing=True, do_nothing_punishment = 1000, track_progress=True, verbose=True, debug=False):
+        
         # depot is assumed to be the first stop  
         # SA algorithm hyper-parameters
         self.K = K
@@ -67,7 +77,11 @@ class SA():
         
         self.N = len(self.actual_list)
         output_action = lambda act, exp: 1 if act < exp else -1 if act > exp else 0
+        
+        # p_action: pickup(-1) or dropoff(1)
         self.p_action = [output_action(x[0], x[1]) for x in zip(self.actual_list, self.expected_list)]
+        
+        
         self.diff = list(np.array(self.expected_list) - np.array(self.actual_list))
         
         # Sanity check on problem definition
@@ -95,11 +109,14 @@ class SA():
     # Calculate total time of the route
     def cost(self, seq):
         segments = [seq[i:i+2] for i in range(len(seq)-1)]
-        time_sum = sum([self.time_mtrx[0, 1] for seg in segments])
+        time_sum = sum([self.time_mtrx[seg[0], seg[1]] for seg in segments])
         return time_sum
     
     
     def gen_actions(self, seq):
+        '''
+        Generate the complete action of one iteration
+        '''
         
         actions = [0]
         truck_inv = [0]
@@ -107,7 +124,8 @@ class SA():
         
         for s in seq[1:-1]:
             if self.diff[s] < 0: # pick up, to_pickup < 0
-                to_pickup = max(self.diff[s], truck_inv[-1]-self.C)
+                # to_pickup 是负数，
+                to_pickup = max(self.diff[s], truck_inv[-1]-self.C) 
                 actions += [to_pickup]
                 truck_inv += [truck_inv[-1] - to_pickup]
                 station_inv[s] += to_pickup
@@ -120,17 +138,22 @@ class SA():
         actions += [0]
         truck_inv += [truck_inv[-1]]
         
+        # station_inv 每次只变化一个？
+        
         return actions, truck_inv, station_inv
     
     
     def objective(self, seq):
         actions, _, station_inv = self.gen_actions(seq)
+        
+        # Q1: objective function <0 的sum两者取差
         obj = abs(np.array(station_inv) - np.array(self.expected_list)).sum()
         
         if self.punish_do_nothing:
             do_nothing = any([x == 0 for x in actions[1:-1]])
+            # Q4: Maximize objective function -=?
             obj += do_nothing * self.do_nothing_punishment
-            
+        
         return obj
         
     
@@ -152,6 +175,7 @@ class SA():
         elif perm == "remove":
             stops_to_remove = list(set(seq).difference({0}))
             pos_to_remove = range(1, len(seq)-1)
+            # Q: 这个部分好像和stop没有关系吧？只randomize position应该可以
             pos, stop = r.choice(pos_to_remove), r.choice(stops_to_remove)
             seq_new = seq_new[:pos] + seq_new[pos+1:]
         elif perm == "swap":
@@ -171,8 +195,10 @@ class SA():
     def gen_new_seq(self, seq):
         
         # Decide on candidate permutations to perform
+        # 跑不完的不去penalize么？
         if self.cost(seq) > self.time_limit:
             candidate_perm = ['remove', 'swap', 'revert']
+        # 新generate的seq会不会出现跑不完的情况？
         elif len(seq) - 1 == self.N:
             candidate_perm = ['swap', 'revert']
         elif len(seq)-2 == 1:
@@ -185,6 +211,7 @@ class SA():
         
         while keep_searching:
             rand_perm = r.choice(candidate_perm)
+            # 改action
             seq_new = self.permute_seq(seq, rand_perm)
             if self.cost(seq_new) < self.time_limit:
                 keep_searching = False
@@ -194,21 +221,23 @@ class SA():
     @time_it
     def simulated_annealing(self):
         
+        # only choose initial station for pickup* 
         seq_curr = self.gen_init_seq()
+        
         obj_curr = self.objective(seq_curr)
         seq_best = seq_curr.copy()
         obj_best = obj_curr
-        
         i = 0
         i_tol = 0
         
+        # start iteration from the first position 
         while (i < self.iter_max) & (i_tol < self.tolerance):
             
             seq_new = self.gen_new_seq(seq_curr)
             obj_curr = self.objective(seq_curr)
             obj_new = self.objective(seq_new)
             
-            if obj_curr <= obj_new:
+            if obj_curr <= obj_new:# maximize？
                 seq_curr = seq_new
                 obj_curr = obj_new
             elif r.uniform(0, 1) < np.exp(-(obj_new - obj_curr) / (self.K + self.temp)):
@@ -216,6 +245,7 @@ class SA():
                 obj_curr = obj_new
                 
             if obj_curr < obj_best:
+                # Q2: obj_curr > obj_best?
                 obj_best = obj_curr
                 seq_best = seq_curr
                 i_tol = 0
@@ -245,31 +275,41 @@ class SA():
             self.progress = pd.DataFrame.from_dict(self.progress)
     
     
-    def print_solution(self):
-        print("Iterations: {}.".format(self.progress.shape[0]))
-        action_type = ['+' + str(x) if x > 0 else str(x) for x in self.actions]
-        action_seq = ' --> '.join(['0'] + [str(x) + ' (' + y + ')' for x, y in zip(self.route, action_type)][1:-1] + ['0'])
-        print("Route: {}".format(action_seq))
-        print("Objective: {}".format(self.redist_obj))
-        print("Time: {}".format(self.cost(self.route)))
+    def output_solution(self, verbose):
         
-        print("\nROUTE")
-        sol = {"stop": self.route,
-               "action": self.actions,
-               "truck_inv": self.truck_inventory,
-               "station_inv": [self.station_inventory[x] for x in self.route]
-               }
-        print(pd.DataFrame.from_dict(sol))
-        
-        print("\nSTATION INVENTORY")
+        sol = pd.DataFrame({"stop": self.route,
+                           "action": self.actions,
+                           "truck_inv": self.truck_inventory,
+                           "station_inv": [self.station_inventory[x] for x in self.route]
+                           })
         redist = [self.station_inventory[self.ind_to_stop.index(x)] if x in self.ind_to_stop \
-                  else self.actual_list_raw[x] for x in range(len(self.actual_list_raw))]
-        inv = {'actual': self.actual_list_raw,
-               'expected': self.expected_list_raw,
-               'redist': redist,
-               'diff': abs(np.array(redist) - np.array(self.expected_list_raw))
-               }
-        print(pd.DataFrame.from_dict(inv))
+                      else self.actual_list_raw[x] for x in range(len(self.actual_list_raw))]
+        inv = pd.DataFrame({'actual': self.actual_list_raw,
+                           'expected': self.expected_list_raw,
+                           'redist': redist,
+                           'diff': abs(np.array(redist) - np.array(self.expected_list_raw))
+                           })
+        output = {'iterations': self.progress.shape[0],
+                'satisfied_customers': self.redist_obj,
+                'time': self.cost(self.route),
+                'route_df': sol,
+                'station_inv_df': inv}
+        
+        if verbose:
+            print("Iterations: {}.".format(self.progress.shape[0]))
+            action_type = ['+' + str(x) if x > 0 else str(x) for x in self.actions]
+            action_seq = ' --> '.join(['0'] + [str(x) + ' (' + y + ')' for x, y in zip(self.route, action_type)][1:-1] + ['0'])
+            print("Route: {}".format(action_seq))
+            print("Objective(unsatisfied customer): {}".format(self.redist_obj))
+            print("Time: {}".format(output['time']))
+            
+            print("\nROUTE")
+            print(output['sol'])
+            
+            print("\nSTATION INVENTORY")
+            print(output['station_inv_df'])
+            
+        return output
         
 
     

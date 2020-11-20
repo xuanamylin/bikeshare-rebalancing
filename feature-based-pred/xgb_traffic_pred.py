@@ -128,20 +128,16 @@ dataset.fillna(-999, inplace = True)
 # Filtering -----------------------------------------------------------------
 
 # 1. Limit data to opearting hours
-dataset = dataset[(dataset['time_bin'] >= operating_window[0])
-                  & (dataset['time_bin'] <= operating_window[1]-2)]  # (31675, 11)
+#dataset = dataset[(dataset['time_bin'] >= operating_window[0])
+#                  & (dataset['time_bin'] <= operating_window[1]-2)]  # (31675, 11)
 
 # 2. Eliminate data during outage
 
 # Outage periods collected by sensors
-bike_outage = sensor[(sensor['available_bikes'] == 0) 
-                     & (sensor['hour'] >= operating_window[0]) 
-                     & (sensor['hour'] <= operating_window[1])][['id', 'date_clean']].copy()
+bike_outage = sensor[sensor['available_bikes'] == 0][['id', 'date_clean']].copy()
 bike_outage.columns = ['station_id', 'date_clean']
 
-dock_outage = sensor[(sensor['available_docks'] == 0)
-                     & (sensor['hour'] >= operating_window[0]) 
-                     & (sensor['hour'] <= operating_window[1])][['id', 'date_clean']].copy()
+dock_outage = sensor[sensor['available_docks'] == 0][['id', 'date_clean']].copy()
 dock_outage.columns = ['station_id', 'date_clean']
 
 print('Bike outage periods: {}'.format(bike_outage.shape[0]))  # 16726
@@ -154,6 +150,7 @@ bike_outage['time_bin'] = pd.cut(bike_outage['hour'],
                                  bins = range(-1, 25, window_duration),
                                  include_lowest = False,
                                  labels = range(0, 23, window_duration))
+bike_outage['time_bin'] = list(map(int, bike_outage['time_bin']))
                                  
 
 dock_outage['date'] = pd.to_datetime(dock_outage['date_clean']).dt.date
@@ -161,6 +158,7 @@ dock_outage['time_bin'] = pd.cut(pd.to_datetime(dock_outage['date_clean']).dt.ho
                                  bins = range(-1, 25, window_duration),
                                  include_lowest = True,
                                  labels = range(0, 23, window_duration))
+dock_outage['time_bin'] = list(map(int, dock_outage['time_bin']))
 
 # Filter out bottleneck time_bins
 in_dataset = pd.merge(dataset, dock_outage[['station_id', 'date', 'time_bin']].drop_duplicates(),
@@ -248,6 +246,7 @@ joblib.dump(model_out, path + 'model_out.pkl')
 
 
 """
+## limit to operating hours ##
 in
              r2      rmse       mae
 train  0.780069  7.529283  2.483760
@@ -257,6 +256,20 @@ out
              r2      rmse       mae
 train  0.795729  6.548119  2.193581
 test   0.765157  6.810390  2.191537
+
+
+## Without limiting operating hours ##
+Evaluation for Train & Test
+in
+             r2      rmse       mae
+train  0.779726  6.085722  1.206968
+test   0.755948  6.098199  1.199870
+
+out
+             r2      rmse       mae
+train  0.800689  5.269502  1.153267
+test   0.752593  5.826440  1.181848
+
 """
 
 

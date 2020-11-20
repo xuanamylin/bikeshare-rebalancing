@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-
 Capstone: Run Simulated Annealing 
-
 Created on Sun Oct 25 16:41:31 2020
-
 @author: xuanlin
-
 """
 
 import sys
@@ -149,12 +145,14 @@ def convert_ACO_time_mtrx(mtrx):
         mtrx[i][i] = np.inf
     return mtrx
 
-def output_aco_solution(aco_output, aco_opt):
-    best_path, time_used, satisfied_customers, truck_inv, redist_cnt = aco_output
+def output_aco_solution(aco_output):
+    best_path, time_used, satisfied_customers, truck_final_inv, redist_cnt, action, truck_inv = aco_output
     unsatisfied_customers = sum(abs(aco_opt.demand)) - satisfied_customers
     aco_route = [p[0] for p in best_path] + [start_station]
-    aco_actions = [redist_cnt[i] for i in aco_route]
-    truck_inv = (np.array(aco_actions) * -1).cumsum()
+    aco_actions = action
+    actions = [redist_cnt[i] for i in aco_route]
+    #truck_inv = (np.array(aco_actions) * -1).cumsum()
+
     
     aco_station_inv_df = pd.DataFrame({'stop': range(len(case['actual_cnt'])),
                                        'actual': case['actual_cnt'],
@@ -163,10 +161,9 @@ def output_aco_solution(aco_output, aco_opt):
                                        })
     aco_station_inv_df['diff'] = abs(aco_station_inv_df['expected'] - aco_station_inv_df['redist'])
     
-    aco_actions = [(aco_opt.demand - redist_cnt)[i] for i in aco_route]
     aco_route_df = pd.DataFrame({'stop': aco_route,
-                                 'action': aco_actions,
-                                 'truck_inv': np.array(aco_actions).cumsum(),
+                                 'truck_inv': truck_inv,#(np.array(aco_actions) * -1).cumsum(),
+                                 'action': aco_actions,#[redist_cnt[i] for i in aco_route],
                                  'actual': [aco_station_inv_df['actual'][i] for i in aco_route],
                                  'expected': [aco_station_inv_df['expected'][i] for i in aco_route],
                                  'redist': [aco_station_inv_df['redist'][i] for i in aco_route],
@@ -212,17 +209,11 @@ save_pickle(opt_solutions,output_path + pickle_name)
 
 """
 # ------------------ Plot Convergence ------------------ #
-
 from matplotlib import pyplot as plt
-
 def moving_average(a, n=3) :
     ret = np.cumsum(a, dtype=float)
     ret[n:] = ret[n:] - ret[:-n]
     return ret[n - 1:] / n
-
 a = moving_average(np.array(opt.progress['obj_curr']), n = 10)
-
 plt.plot(a)
 """
-
-

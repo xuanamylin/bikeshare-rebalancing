@@ -48,12 +48,12 @@ truck_capacity = 15
 debug = False
 start_station = 0
 
-sa_hyperparameters = {'temp_schedule': 100, 
-                  'K': 100, 
-                  'alpha': 0.96, 
-                  'iter_max': 1000, 
+sa_hyperparameters = {'temp_schedule': 80, 
+                  'K': 50, 
+                  'alpha': 0.8,
+                  'iter_max': 5000, 
                   'temp': 100, 
-                  'tolerance': 500
+                  'tolerance': 1000
                   }
 
 aco_hyperparameters = {'n_ants': 1,
@@ -121,17 +121,23 @@ case.sort_values('station_id', inplace = True)
 
 # Set up the problem
 sa_opt = sa.SA(time_mtrx = time_mtrx.values,
-         time_limit = time_limit,
-         actual_list = list(case['actual_cnt']), 
-         expected_list = list(case['expected_cnt']),
-         station_capacity = list(case['capacity']),
-         truck_capacity = truck_capacity,
-         debug = debug,
-         **sa_hyperparameters)
+             time_limit = time_limit,
+             actual_list = list(case['actual_cnt']), 
+             expected_list = list(case['expected_cnt']),
+             station_capacity = list(case['capacity']),
+             truck_capacity = truck_capacity,
+             do_nothing_punishment = 0,
+             debug = debug,
+             **sa_hyperparameters)
 
 sa_opt.simulated_annealing()  # Run the optimizatino algorithm
 sa_solution = sa_opt.output_solution(verbose = False)  # Print report
-#sa_opt.plot_convergence(plot_obj_curr=True)
+sa_opt.output_solution(verbose = True)
+
+sa_opt.plot_convergence(plot_obj_curr=False)
+
+sa_solution['time']
+sa_solution['unsatisfied_customers'] # 279, 262, 260, 259, 234
 
 
 # ------------------ RUN ACO ----------------- #
@@ -145,7 +151,7 @@ def convert_ACO_time_mtrx(mtrx):
 
 def output_aco_solution(aco_output, aco_opt):
     best_path, time_used, satisfied_customers, truck_inv, redist_cnt = aco_output
-    unsatisfied_customers = sum(abs(aco_opt.demand)) - satisfied_requests
+    unsatisfied_customers = sum(abs(aco_opt.demand)) - satisfied_customers
     aco_route = [p[0] for p in best_path] + [start_station]
     aco_actions = [redist_cnt[i] for i in aco_route]
     truck_inv = (np.array(aco_actions) * -1).cumsum()
@@ -189,16 +195,17 @@ aco_solution = output_aco_solution(aco_output, aco_opt)
 
 def save_pickle(dict_to_save, file_path):
     with open(file_path, 'wb') as handle:
-        pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(dict_to_save, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        
+def load_pickle(file_path):
+    with open(file_path, 'rb') as handle:
+        content = pickle.load(handle)
+    return content
 
 opt_solutions = {'sa': sa_solution, 'aco': aco_solution}
 
 pickle_name = "solution_{}_{}_{}.pickle".format(sample_date, sample_bin, 1)
 save_pickle(opt_solutions,output_path + pickle_name)
-
-
-
-
 
 
 

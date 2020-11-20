@@ -49,7 +49,8 @@ class SA():
                  iter_max=1000, 
                  temp=100, 
                  tolerance=500, 
-                 punish_do_nothing=True, do_nothing_punishment = 1000, track_progress=True, verbose=True, debug=False):
+                 punish_do_nothing=True, 
+                 do_nothing_punishment = 1000, track_progress=True, verbose=True, debug=False):
         
         # depot is assumed to be the first stop  
         # SA algorithm hyper-parameters
@@ -97,7 +98,7 @@ class SA():
     
     # Remove stops w/o the need of rebalancing
     def preprocess_constants(self, actual_list, expected_list, time_mtrx, station_capacity):
-        ind_to_opt = [0] + list(np.where(np.array(actual_list) != np.array(expected_list))[0])
+        ind_to_opt = list(np.where(np.array(actual_list) != np.array(expected_list))[0])
         ind_to_stop = list(itemgetter(*ind_to_opt)(list(range(len(actual_list)))))
         actual_adj = list(itemgetter(*ind_to_opt)(actual_list))
         expected_adj = list(itemgetter(*ind_to_opt)(expected_list))
@@ -117,10 +118,16 @@ class SA():
         '''
         Generate the complete action of one iteration
         '''
-        
-        actions = [0]
-        truck_inv = [0]
         station_inv = self.actual_list.copy()
+        
+        if self.diff[0] < 0:  # pick up
+            actions = [self.diff[0]]
+            truck_inv = [-self.diff[0]]
+            station_inv[0] += self.diff[0]
+        else:
+            actions = [0]
+            truck_inv = [0]
+        
         
         for s in seq[1:-1]:
             if self.diff[s] < 0: # pick up, to_pickup < 0
@@ -146,7 +153,6 @@ class SA():
     def objective(self, seq):
         actions, _, station_inv = self.gen_actions(seq)
         
-        # Q1: objective function <0 的sum两者取差
         obj = abs(np.array(station_inv) - np.array(self.expected_list)).sum()
         
         if self.punish_do_nothing:
@@ -159,7 +165,7 @@ class SA():
     
     def gen_init_seq(self):
         # get a list of stations that needs to be picked up
-        need_pickup = np.where(np.array(self.p_action) == -1)[0]
+        need_pickup = np.where(np.array(self.p_action[1:]) == -1)[0]
         return [0] + [r.choice(need_pickup)] + [0]
     
     
@@ -275,18 +281,19 @@ class SA():
             self.progress = pd.DataFrame.from_dict(self.progress)
     
     
-    def output_solution(self, verbose):
+    def output_solution(self, verbose=True):
         
-        sol = pd.DataFrame({"stop": self.route,
+        route_ = [self.ind_to_stop[i] for i in self.route]
+        sol = pd.DataFrame({"stop": route_,
                            "action": self.actions,
                            "truck_inv": self.truck_inventory,
-                           "actual": [self.actual_list_raw[i] for i in self.route],
-                           "expected": [self.expected_list_raw[i] for i in self.route], 
+                           "actual": [self.actual_list_raw[i] for i in route_],
+                           "expected": [self.expected_list_raw[i] for i in route_], 
                            "redist": [self.station_inventory[x] for x in self.route]
                            })
         redist = [self.station_inventory[self.ind_to_stop.index(x)] if x in self.ind_to_stop \
                       else self.actual_list_raw[x] for x in range(len(self.actual_list_raw))]
-        inv = pd.DataFrame({'stop': range(self.N),
+        inv = pd.DataFrame({'stop': range(len(self.actual_list_raw)),
                             'actual': self.actual_list_raw,
                            'expected': self.expected_list_raw,
                            'redist': redist,
@@ -301,13 +308,13 @@ class SA():
         if verbose:
             print("Iterations: {}.".format(self.progress.shape[0]))
             action_type = ['+' + str(x) if x > 0 else str(x) for x in self.actions]
-            action_seq = ' --> '.join(['0'] + [str(x) + ' (' + y + ')' for x, y in zip(self.route, action_type)][1:-1] + ['0'])
+            action_seq = ' --> '.join(['0'] + [str(x) + ' (' + y + ')' for x, y in zip(route_, action_type)][1:-1] + ['0'])
             print("Route: {}".format(action_seq))
             print("Objective(unsatisfied customer): {}".format(self.redist_obj))
             print("Time: {}".format(output['time']))
             
             print("\nROUTE")
-            print(output['sol'])
+            print(output['route_df'])
             
             print("\nSTATION INVENTORY")
             print(output['station_inv_df'])

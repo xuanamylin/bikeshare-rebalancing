@@ -280,17 +280,20 @@ class SA():
         sol = pd.DataFrame({"stop": self.route,
                            "action": self.actions,
                            "truck_inv": self.truck_inventory,
-                           "station_inv": [self.station_inventory[x] for x in self.route]
+                           "actual": [self.actual_list_raw[i] for i in self.route],
+                           "expected": [self.expected_list_raw[i] for i in self.route], 
+                           "redist": [self.station_inventory[x] for x in self.route]
                            })
         redist = [self.station_inventory[self.ind_to_stop.index(x)] if x in self.ind_to_stop \
                       else self.actual_list_raw[x] for x in range(len(self.actual_list_raw))]
-        inv = pd.DataFrame({'actual': self.actual_list_raw,
+        inv = pd.DataFrame({'stop': range(self.N),
+                            'actual': self.actual_list_raw,
                            'expected': self.expected_list_raw,
                            'redist': redist,
                            'diff': abs(np.array(redist) - np.array(self.expected_list_raw))
                            })
         output = {'iterations': self.progress.shape[0],
-                'satisfied_customers': self.redist_obj,
+                'unsatisfied_customers': self.redist_obj,
                 'time': self.cost(self.route),
                 'route_df': sol,
                 'station_inv_df': inv}

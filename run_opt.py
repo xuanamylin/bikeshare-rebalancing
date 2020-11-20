@@ -143,7 +143,7 @@ def convert_ACO_time_mtrx(mtrx):
         mtrx[i][i] = np.inf
     return mtrx
 
-def output_aco_solution(aco_output):
+def output_aco_solution(aco_output, aco_opt):
     best_path, time_used, satisfied_customers, truck_inv, redist_cnt = aco_output
     unsatisfied_customers = sum(abs(aco_opt.demand)) - satisfied_requests
     aco_route = [p[0] for p in best_path] + [start_station]
@@ -157,9 +157,10 @@ def output_aco_solution(aco_output):
                                        })
     aco_station_inv_df['diff'] = abs(aco_station_inv_df['expected'] - aco_station_inv_df['redist'])
     
+    aco_actions = [(aco_opt.demand - redist_cnt)[i] for i in aco_route]
     aco_route_df = pd.DataFrame({'stop': aco_route,
-                                 'action': [redist_cnt[i] for i in aco_route],
-                                 'truck_inv': (np.array(aco_actions) * -1).cumsum(),
+                                 'action': aco_actions,
+                                 'truck_inv': np.array(aco_actions).cumsum(),
                                  'actual': [aco_station_inv_df['actual'][i] for i in aco_route],
                                  'expected': [aco_station_inv_df['expected'][i] for i in aco_route],
                                  'redist': [aco_station_inv_df['redist'][i] for i in aco_route],
@@ -174,16 +175,14 @@ def output_aco_solution(aco_output):
 
 # Run algorithm
 aco_opt = aco.Ant_Colony(travel_time = convert_ACO_time_mtrx(time_mtrx.values), 
-                 demand = np.array(case['expected_cnt'] - case['actual_cnt']), 
+                 demand = np.array(case['actual_cnt'] - case['expected_cnt']),
                  capacity = truck_capacity, 
                  time_constraint = time_limit,
                  start_station = start_station, 
                  **aco_hyperparameters)
 
 aco_output = aco_opt.run()
-aco_solution = output_aco_solution(aco_output)
-
-
+aco_solution = output_aco_solution(aco_output, aco_opt)
 
 
 # ----------------- SAVE RESULTS ----------------- #
@@ -192,8 +191,7 @@ def save_pickle(dict_to_save, file_path):
     with open(file_path, 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-opt_solutions = {'sa': sa_solution,
-                 'aco': aco_solution}
+opt_solutions = {'sa': sa_solution, 'aco': aco_solution}
 
 pickle_name = "solution_{}_{}_{}.pickle".format(sample_date, sample_bin, 1)
 save_pickle(opt_solutions,output_path + pickle_name)

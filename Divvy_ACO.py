@@ -6,7 +6,7 @@ ACO by Susan
 
 Created on Thu Nov 19 17:26:56 2020
 
-@author: xuanlin
+@author: Xiangwen Sun
 """
 
 import pandas as pd
@@ -103,7 +103,10 @@ class Ant_Colony(object):
 
     def update_vehicle(self, vehicle, satisfy, move, demand):
         num_bikes_moved = 0 
+        #print('vehicle ',vehicle)
+        #print('demand ', demand)
         #print('demand is :',demand[move])
+
         if vehicle + demand[move] <0:
             satisfy += vehicle
             num_bikes_moved = -vehicle
@@ -188,9 +191,15 @@ class Ant_Colony(object):
         # start inventory
         vehicle = 0
         satisfy = 0
+
+        print("vehicle ",vehicle)
+        print('demand', demand[start])
+        print('demand lst ',demand)
         
         # pick up bikes from initial station  
         satisfy, vehicle, demand, bikes = self.update_vehicle(vehicle, satisfy, start, demand)
+        print('vehicle:gp ',vehicle)
+        print('bikes:gp ', bikes)
         truck_inv.append(vehicle)
         bikes_moved.append(bikes)
             

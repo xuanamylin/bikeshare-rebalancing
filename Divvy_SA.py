@@ -126,8 +126,7 @@ class SA():
             station_inv[0] += self.diff[0]
         else:
             actions = [0]
-            truck_inv = [0]
-        
+            truck_inv = [0]   
         
         for s in seq[1:-1]:
             if self.diff[s] < 0: # pick up, to_pickup < 0
@@ -142,8 +141,15 @@ class SA():
                 truck_inv += [truck_inv[-1] - to_dropoff]
                 station_inv[s] += to_dropoff
         
-        actions += [0]
-        truck_inv += [truck_inv[-1]]
+        # the last stop, station_id = 0
+        if self.diff[0] < 0:
+            actions += [0]
+            truck_inv += [truck_inv[-1]]
+        else:
+            to_dropoff = min(self.diff[0], truck_inv[-1])
+            actions += [to_dropoff]
+            truck_inv += [truck_inv[-1] - to_dropoff]
+            station_inv[0] += to_dropoff
         
         # station_inv 每次只变化一个？
         
@@ -224,7 +230,7 @@ class SA():
         
         return seq_new
     
-    @time_it
+    #@time_it
     def simulated_annealing(self):
         
         # only choose initial station for pickup* 
@@ -284,15 +290,24 @@ class SA():
     def output_solution(self, verbose=True):
         
         route_ = [self.ind_to_stop[i] for i in self.route]
+        
+        route_redist = [self.station_inventory[x] for x in self.route]
+        if (self.action[0] != 0) | (self.action[-1] != 0):
+            if self.actions[0] == 0:
+                route_redist[0] = np.nan
+            else:
+                route_redist[-1] = np.nan
+            
         sol = pd.DataFrame({"stop": route_,
                            "action": self.actions,
                            "truck_inv": self.truck_inventory,
                            "actual": [self.actual_list_raw[i] for i in route_],
                            "expected": [self.expected_list_raw[i] for i in route_], 
-                           "redist": [self.station_inventory[x] for x in self.route]
+                           "redist": route_redist
                            })
         redist = [self.station_inventory[self.ind_to_stop.index(x)] if x in self.ind_to_stop \
                       else self.actual_list_raw[x] for x in range(len(self.actual_list_raw))]
+            
         inv = pd.DataFrame({'stop': range(len(self.actual_list_raw)),
                             'actual': self.actual_list_raw,
                            'expected': self.expected_list_raw,

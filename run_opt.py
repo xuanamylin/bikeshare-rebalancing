@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+
 Capstone: Run Simulated Annealing 
+
 Created on Sun Oct 25 16:41:31 2020
+
 @author: xuanlin
+
 """
 
 import sys
@@ -34,7 +38,7 @@ top_station_ids = [35, 192,  91,  77,  43, 133, 174,  81,  76,  90, 177, 287, 26
                    195,  85, 283, 100,  66, 110,  52, 181,  48,  59, 176,  49]
 
 sample_date = '2018-05-31'
-sample_bin = 14 
+sample_bin = 8 
 features = ['month', 'dayofweek', 'time_bin',    # this has to be replaced later
             'in_trips_prev1', 'out_trips_prev1', 
             'in_trips_ystd', 'out_trips_ystd']
@@ -128,7 +132,6 @@ sa_opt = sa.SA(time_mtrx = time_mtrx.values,
 
 sa_opt.simulated_annealing()  # Run the optimizatino algorithm
 sa_solution = sa_opt.output_solution(verbose = False)  # Print report
-sa_opt.output_solution(verbose = True)
 
 sa_opt.plot_convergence(plot_obj_curr=False)
 
@@ -145,29 +148,32 @@ def convert_ACO_time_mtrx(mtrx):
         mtrx[i][i] = np.inf
     return mtrx
 
-def output_aco_solution(aco_output):
+def output_aco_solution(aco_output, aco_opt, actual_list, expected_list):
     best_path, time_used, satisfied_customers, truck_final_inv, redist_cnt, action, truck_inv = aco_output
     unsatisfied_customers = sum(abs(aco_opt.demand)) - satisfied_customers
     aco_route = [p[0] for p in best_path] + [start_station]
-    aco_actions = action
-    actions = [redist_cnt[i] for i in aco_route]
-    #truck_inv = (np.array(aco_actions) * -1).cumsum()
-
-    
-    aco_station_inv_df = pd.DataFrame({'stop': range(len(case['actual_cnt'])),
-                                       'actual': case['actual_cnt'],
-                                       'expected': case['expected_cnt'],
-                                       'redist': case['expected_cnt'] - np.array(redist_cnt),
+        
+    aco_station_inv_df = pd.DataFrame({'stop': range(len(actual_list)),
+                                       'actual': actual_list,
+                                       'expected': expected_list,
+                                       'redist': np.array(actual_list) - np.array(redist_cnt)
                                        })
-    aco_station_inv_df['diff'] = abs(aco_station_inv_df['expected'] - aco_station_inv_df['redist'])
     
     aco_route_df = pd.DataFrame({'stop': aco_route,
-                                 'truck_inv': truck_inv,#(np.array(aco_actions) * -1).cumsum(),
-                                 'action': aco_actions,#[redist_cnt[i] for i in aco_route],
+                                 'truck_inv': truck_inv,
+                                 'action': action,
                                  'actual': [aco_station_inv_df['actual'][i] for i in aco_route],
-                                 'expected': [aco_station_inv_df['expected'][i] for i in aco_route],
-                                 'redist': [aco_station_inv_df['redist'][i] for i in aco_route],
+                                 'expected': [aco_station_inv_df['expected'][i] for i in aco_route]
                                  })
+    
+    #route_redist = aco_route_df['actual'] - aco_route_df['action']
+    aco_route_df['redist'] = aco_route_df['actual'] - aco_route_df['action']
+    if (action[0] != 0) | (action[-1] != 0):
+        if action[0] == 0:
+            aco_route_df.iloc[0, -1] = np.nan
+        else:
+            aco_route_df.iloc[-1, -1] = np.nan
+    #aco_route_df['redist'] = route_redist
     
     return {'time': time_used,
             'satisfied_customers': satisfied_customers,
@@ -177,6 +183,8 @@ def output_aco_solution(aco_output):
 
 
 # Run algorithm
+actual_list = list(case['actual_cnt'])
+expected_list = list(case['expected_cnt'])
 aco_opt = aco.Ant_Colony(travel_time = convert_ACO_time_mtrx(time_mtrx.values), 
                  demand = np.array(case['actual_cnt'] - case['expected_cnt']),
                  capacity = truck_capacity, 
@@ -185,7 +193,8 @@ aco_opt = aco.Ant_Colony(travel_time = convert_ACO_time_mtrx(time_mtrx.values),
                  **aco_hyperparameters)
 
 aco_output = aco_opt.run()
-aco_solution = output_aco_solution(aco_output, aco_opt)
+aco_solution = output_aco_solution(aco_output, aco_opt, actual_list, expected_list)
+
 
 
 # ----------------- SAVE RESULTS ----------------- #
@@ -209,11 +218,17 @@ save_pickle(opt_solutions,output_path + pickle_name)
 
 """
 # ------------------ Plot Convergence ------------------ #
+
 from matplotlib import pyplot as plt
+
 def moving_average(a, n=3) :
     ret = np.cumsum(a, dtype=float)
     ret[n:] = ret[n:] - ret[:-n]
     return ret[n - 1:] / n
+
 a = moving_average(np.array(opt.progress['obj_curr']), n = 10)
+
 plt.plot(a)
 """
+
+

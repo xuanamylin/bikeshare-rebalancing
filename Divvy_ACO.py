@@ -177,7 +177,8 @@ class Ant_Colony(object):
             dist =0
             for ele in path:
                 dist += self.travel_time[ele]
-                total_dist = max(dist,total_dist)
+                if dist != np.inf:
+                    total_dist = max(dist,total_dist)
         return total_dist
 
     def gen_all_paths(self):
@@ -297,6 +298,12 @@ class Ant_Colony(object):
                 truck_inv[truck].append(bikes_on_this_truck)
                 bikes_moved[truck].append(bikes)
                 prev[truck] = final
+                
+            #print('final',truck_time_travel)
+            #print(truck_selected)
+            #print(prev[truck])
+            #print('truck', truck)
+            
             
             if prev[truck] != final:
                 next_travel_time = truck_travel_duration+curr_time
@@ -304,10 +311,13 @@ class Ant_Colony(object):
                     if truck_time_travel[i] > next_travel_time:
                         truck_time_travel.insert(i,next_travel_time)
                         truck_selected.insert(i,truck)
-                if truck_time_travel[-1] < next_travel_time:
+                if len(truck_time_travel) ==0:
+                    truck_time_travel.append(next_travel_time)
+                    truck_selected.append(truck)
+                elif truck_time_travel[len(truck_time_travel)-1] < next_travel_time:
                     truck_time_travel.insert(len(truck_time_travel)+1,next_travel_time)
                     truck_selected.insert(len(truck_selected)+1,truck)
-                #print('final',truck_time_travel)
+                #print('final truck time',truck_time_travel)
                 #print(truck_selected)
 
         return paths, satisfy, bikes_on_trucks, demand, bikes_moved, truck_inv

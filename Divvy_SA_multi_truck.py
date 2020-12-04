@@ -185,7 +185,7 @@ class SA():
                 to_dropoff = min(loc_diff, truck_inv[i][-1])
                 actions[i] += [to_dropoff]
                 truck_inv[i] += [truck_inv[i][-1] - to_dropoff]
-                station_inv[i] += to_dropoff
+                station_inv[0] += to_dropoff
                 loc_diff -= to_dropoff
         
         return actions, truck_inv, station_inv
@@ -414,7 +414,7 @@ class SA():
                            })
         output = {'iterations': self.progress.shape[0],
                 'unsatisfied_customers': self.redist_obj,
-                'time': self.cost(self.route),
+                'time': max(self.cost(self.route)),
                 'route_df': sol,
                 'station_inv_df': inv}
         

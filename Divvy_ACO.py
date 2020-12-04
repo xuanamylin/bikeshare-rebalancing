@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+
 ACO by Susan
+
 Created on Thu Nov 19 17:26:56 2020
+
 @author: Xiangwen Sun
 """
 
@@ -11,7 +14,7 @@ import numpy as np
 import random as rn
 from numpy.random import choice as np_choice
 from copy import deepcopy
-
+from queue import Queue
 
 class Ant_Colony(object):
 
@@ -24,7 +27,12 @@ class Ant_Colony(object):
                  demand,
                  capacity, 
                  time_constraint = 60,
+                 #start_together = True,
+                 pick_up_init_station = True,
+                 return_init_station = True,
                  start_station=0, 
+                 final_station = None,
+                 num_truck = 1,
                  alpha=0.5, 
                  beta=1,
                  multiple_visits = False):
@@ -46,6 +54,7 @@ class Ant_Colony(object):
         if start_station > len(travel_time):
             raise Exception("start station is out of range")
         self.start_station = start_station
+        self.final_station = final_station
         self.travel_time  = travel_time
         self.pheromone = np.ones(self.travel_time.shape) / len(travel_time)
         self.all_inds = range(len(travel_time))
@@ -58,12 +67,16 @@ class Ant_Colony(object):
         self.time_constraint = time_constraint
         self.demand = demand
         self.capacity = capacity
+        self.num_truck = num_truck
         self.multiple_visits = multiple_visits
-        self.all_time_best_path = ("placeholder", np.inf, 0, 0, self.demand)
+        self.pick_up_init_station = pick_up_init_station
+        self.return_init_station = return_init_station
+        #self.start_together = start_together 
+        self.all_time_best_path = ("placeholder", np.inf,[0], [0], [0], self.demand,[0],[0])
 
     def run(self):
         best_path = None
-        all_time_best_path = ("placeholder", np.inf, 0, 0, self.demand,0,0)
+        all_time_best_path = ("placeholder", np.inf,[0], [0], [0], self.demand,[0],[0])
         for i in range(self.n_iterations):
             all_paths = self.gen_all_paths()
             self.spread_pheromone(all_paths, self.n_best, best_path=best_path)
@@ -93,16 +106,13 @@ class Ant_Colony(object):
             print('time traveled', self.all_time_best_path[1])
             print('satisfied customer', self.all_time_best_path[2])
             print('unsatisfied customer', sum(abs(self.demand)) - self.all_time_best_path[2])
-            print('final vehicle inventory', self.all_time_best_path[3])
-            print('demand left', self.all_time_best_path[4])
-            print('bike pick up/ drop off action', self.all_time_best_path[5])
-            print('truck inventory list', self.all_time_best_path[6])
+            print('final vehicle inventory', self.all_time_best_path[4])
+            print('demand left', self.all_time_best_path[5])
+            print('bike pick up/ drop off action', self.all_time_best_path[6])
+            print('truck inventory list', self.all_time_best_path[7])
 
     def update_vehicle(self, vehicle, satisfy, move, demand):
         num_bikes_moved = 0 
-        #print('vehicle ',vehicle)
-        #print('demand ', demand)
-        #print('demand is :',demand[move])
 
         if vehicle + demand[move] <0:
             satisfy += vehicle
@@ -120,7 +130,6 @@ class Ant_Colony(object):
             num_bikes_moved = self.capacity - vehicle
             demand[move] = demand[move]- (self.capacity - vehicle)
             vehicle = self.capacity
-        #print('bikes is:', num_bikes_moved)
         return satisfy, vehicle, demand, num_bikes_moved
 
     def pick_move(self, pheromone1, dist, visited, vehicle,demand):
@@ -148,7 +157,6 @@ class Ant_Colony(object):
         # if no more demand could be satisfied, truck back to origin
         if sum(pheromone) == 0:
             move =-1
-            #print('wow')
         else:
             row = pheromone ** self.alpha * (( 1.0 / dist) ** self.beta)
             norm_row = row / row.sum()
@@ -156,73 +164,161 @@ class Ant_Colony(object):
         return move
     
     def spread_pheromone(self, all_paths, n_best, best_path):
-        sorted_paths = sorted(all_paths, key=lambda x: x[1])
-        for path, dist, satisfy,__,__,__,__ in sorted_paths[:n_best]:
-            for move in path:
-                # Objective: satisfy the most customers
-                self.pheromone[move] += 1/ ((sum(abs(self.demand))+1-satisfy)+1)
+        sorted_paths = sorted(all_paths, key=lambda x: x[2]) # sorted by total satisfy customer
+        for paths, dist, satisfy,__,__,__,__,__ in sorted_paths[:n_best]:
+            for path in paths:
+                for move in path:
+                    # Objective: satisfy the most customers
+                    self.pheromone[move] += 1/ ((sum(abs(self.demand))+1-satisfy)+1)
 
-    def gen_path_dist(self, path):
+    def gen_path_dist(self, paths):
         total_dist = 0
-        for ele in path:
-            total_dist += self.travel_time[ele]
+        for path in paths:
+            dist =0
+            for ele in path:
+                dist += self.travel_time[ele]
+                if dist != np.inf:
+                    total_dist = max(dist,total_dist)
         return total_dist
 
     def gen_all_paths(self):
         all_paths = []
         for i in range(self.n_ants):
             path, satisfy, vehicle, demand, bikes, truck_inv = self.gen_path(self.start_station) 
-            all_paths.append((path, self.gen_path_dist(path), satisfy, vehicle, demand, bikes, truck_inv))
+            total_number_satisfy = np.array(satisfy).sum()
+            all_paths.append((path, self.gen_path_dist(path), total_number_satisfy, satisfy, vehicle, demand, bikes, truck_inv))
         return all_paths
 
     
     def gen_path(self, start):
-        path = []
-        bikes_moved =[]
-        truck_inv =[]
+        """
+        Args:
+            travel_time (2D numpy.array): Square matrix of travel_time. Diagonal is assumed to be np.inf.
+            paths(list of list): path of different trucks
+            prev(list): list of previous stations for different trucks
+            bikes_on_trucks(list): the current number of bikes in different trucks 
+            satisfy(list): the current satisfied customer by each truck
+            truck_inv(list of list): a list to record the truck inventory after each action for all trucks 
+            bikes_moved(list of list): number of bikes moved after each action for all trucks
+        Other used Args:
+            self.num_truck
+            self.pick_up_init_station: whether to pick up at the initial station
+            self.start_together: whether all trucks are starting at the same location
+        """
+        # action related variables
+        paths = [[] for _ in range(self.num_truck)]
+        truck_inv =[[] for _ in range(self.num_truck)]
+        bikes_moved = [[] for _ in range(self.num_truck)]
+        # truck related variables
+        prev = [start for _ in range(self.num_truck)] # if self.start_together == True
+        bikes_on_trucks = [0 for _ in range(self.num_truck)]
+        satisfy = [0 for _ in range(self.num_truck)]
+        #print('paths: ', paths)
+        # station related variables
         visited = set()
         visited.add(start)
-        prev = start
         demand = deepcopy(self.demand)
-        remaining_travel_time = self.time_constraint
-        # start inventory
-        vehicle = 0
-        satisfy = 0
+        time_constraint = deepcopy(self.time_constraint)
+        
+        if self.return_init_station:
+            final = start
+        else:
+            final = self.final_station
+        
+        # 在第一个station pick up
+        if self.pick_up_init_station:
+            for truck in range(self.num_truck):
+                satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                satisfy_on_this_truck, 
+                                                                                                start, 
+                                                                                                demand)
+                satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                truck_inv[truck].append(bikes_on_this_truck)
+                bikes_moved[truck].append(bikes)
 
-        #print("vehicle ",vehicle)
-        #print('demand', demand[start])
-        #print('demand lst ',demand)
+                
+        # intialize current time, truck_travel_time queue, and truck selected queue.
+        curr_time = 0
         
-        # pick up bikes from initial station  
-        satisfy, vehicle, demand, bikes = self.update_vehicle(vehicle, satisfy, start, demand)
-        #print('vehicle:gp ',vehicle)
-        #print('bikes:gp ', bikes)
-        truck_inv.append(vehicle)
-        bikes_moved.append(bikes)
+        truck_time_travel = [0 for _ in range(self.num_truck)]
+        truck_selected = [i for i in range(self.num_truck)]
+        
+        while curr_time < time_constraint:
+            if len(truck_time_travel) <1:
+                break
+            curr_time = truck_time_travel.pop(0)
+            truck = truck_selected.pop(0)
+            #print('curr_time: ', curr_time)
+            #print('truck: ',truck)
+            #print('ttt',truck_selected)
             
-        for i in range(len(self.travel_time) - 1):
-            move = self.pick_move(self.pheromone[prev], self.travel_time[prev], visited, vehicle,demand)
-            # check if we can take this move 
-            if move ==-1:
-                break
-            elif remaining_travel_time > self.travel_time[prev][move]+self.travel_time[move][start]:
-                remaining_travel_time -= self.travel_time[prev][move]
-                # calculate how much demand satisfied by this move & how the vehicle would change
-                satisfy, vehicle, demand,bikes = self.update_vehicle(vehicle, satisfy, move, demand)
-                #print('demand lst: ', demand)
-                path.append((prev, move))
-                prev = move
+            this_truck_prev, bikes_on_this_truck = prev[truck], bikes_on_trucks[truck]
+            move = self.pick_move(self.pheromone[this_truck_prev], 
+                                  self.travel_time[this_truck_prev], 
+                                  visited, 
+                                  bikes_on_this_truck, 
+                                  demand)
+            truck_travel_duration = self.travel_time[this_truck_prev][move]
+            #print('move',move)
+            if move ==-1: # end action
+                paths[truck].append((this_truck_prev, final)) # going back to where we started
+                satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                satisfy_on_this_truck, 
+                                                                                                final, 
+                                                                                                demand)
+                satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                truck_inv[truck].append(bikes_on_this_truck)
+                bikes_moved[truck].append(bikes)
+                prev[truck] = final
+            # If there is still time to travel to the next station
+            elif time_constraint - curr_time > self.travel_time[this_truck_prev][move]+self.travel_time[move][final]:
+                satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                satisfy_on_this_truck, 
+                                                                                                move, 
+                                                                                                demand)
+                satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                truck_inv[truck].append(bikes_on_this_truck)
+                bikes_moved[truck].append(bikes)
+                paths[truck].append((this_truck_prev, move))
+                prev[truck] = move
                 visited.add(move)
-                bikes_moved.append(bikes)
-                truck_inv.append(vehicle)
-            else: 
-            # there is not enough time left to travel to the next station
-            # break and go back to the starting point directly
-                break
-        path.append((prev, start)) # going back to where we started    
-        remaining_travel_time -= self.travel_time[prev][start]
-        
-        satisfy, vehicle, demand,bikes = self.update_vehicle(vehicle, satisfy, start, demand)
-        bikes_moved.append(bikes)
-        truck_inv.append(vehicle)
-        return path, satisfy, vehicle, demand, bikes_moved, truck_inv
+            # this truck go back to the intial station
+            else:
+                paths[truck].append((this_truck_prev, final)) # going back to where we started
+                satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                satisfy_on_this_truck, 
+                                                                                                final, 
+                                                                                                demand)
+                #试一下 don't actually need it
+                satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                truck_inv[truck].append(bikes_on_this_truck)
+                bikes_moved[truck].append(bikes)
+                prev[truck] = final
+                
+            #print('final',truck_time_travel)
+            #print(truck_selected)
+            #print(prev[truck])
+            #print('truck', truck)
+            
+            
+            if prev[truck] != final:
+                next_travel_time = truck_travel_duration+curr_time
+                for i in range(len(truck_time_travel)):
+                    if truck_time_travel[i] > next_travel_time:
+                        truck_time_travel.insert(i,next_travel_time)
+                        truck_selected.insert(i,truck)
+                if len(truck_time_travel) ==0:
+                    truck_time_travel.append(next_travel_time)
+                    truck_selected.append(truck)
+                elif truck_time_travel[len(truck_time_travel)-1] < next_travel_time:
+                    truck_time_travel.insert(len(truck_time_travel)+1,next_travel_time)
+                    truck_selected.insert(len(truck_selected)+1,truck)
+                #print('final truck time',truck_time_travel)
+                #print(truck_selected)
+
+        return paths, satisfy, bikes_on_trucks, demand, bikes_moved, truck_inv
+    

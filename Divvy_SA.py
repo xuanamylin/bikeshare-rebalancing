@@ -15,8 +15,10 @@ import pandas as pd
 import random as r
 import datetime as dt
 from matplotlib import pyplot as plt
-import functools as ft
 from operator import itemgetter
+from itertools import chain, groupby
+from numpy.random import choice, shuffle
+import warnings
 
 
 # Timing Decorator
@@ -37,6 +39,7 @@ class ProblemDefinitionError(Exception):
 
 class SA():
     def __init__(self, 
+                 n_truck,
                  time_mtrx, 
                  actual_list, 
                  expected_list, 
@@ -50,10 +53,13 @@ class SA():
                  temp=100, 
                  tolerance=500, 
                  punish_do_nothing=True, 
-                 do_nothing_punishment = 1000, track_progress=True, verbose=True, debug=False):
+                 do_nothing_punishment = 1000, 
+                 multi_visit = True,
+                 track_progress=True, verbose=True, debug=False):
         
         # depot is assumed to be the first stop  
         # SA algorithm hyper-parameters
+        self.n_truck = n_truck
         self.K = K
         self.temp_schedule = temp_schedule
         self.alpha = alpha
@@ -65,6 +71,7 @@ class SA():
         self.do_nothing_punishment = do_nothing_punishment
         self.track_progress = track_progress
         if self.track_progress: self.progress = []
+        self.multi_visit = multi_visit
         self.debug = debug
         
         # Problem constants
@@ -94,11 +101,13 @@ class SA():
             raise ProblemDefinitionError("No re-distribution is needed.")
         elif all([x >= 0 for x in self.diff]):
             raise ProblemDefinitionError("Net bike deficit.")
+        elif max(chain(*self.time_mtrx)) * 2 > self.time_limit:
+            warnings.warm("Warning: Some stops will never be traversed due to the time limit. Consider loosening the time limit.")
     
     
     # Remove stops w/o the need of rebalancing
     def preprocess_constants(self, actual_list, expected_list, time_mtrx, station_capacity):
-        ind_to_opt = list(np.where(np.array(actual_list) != np.array(expected_list))[0])
+        ind_to_opt = [0] + list(np.where(np.array(actual_list)[1:] != np.array(expected_list)[1:])[0]+1)
         ind_to_stop = list(itemgetter(*ind_to_opt)(list(range(len(actual_list)))))
         actual_adj = list(itemgetter(*ind_to_opt)(actual_list))
         expected_adj = list(itemgetter(*ind_to_opt)(expected_list))
@@ -109,125 +118,284 @@ class SA():
     
     # Calculate total time of the route
     def cost(self, seq):
-        segments = [seq[i:i+2] for i in range(len(seq)-1)]
-        time_sum = sum([self.time_mtrx[seg[0], seg[1]] for seg in segments])
-        return time_sum
+        cost_list = []
+        for s in seq:
+            segments = [s[i:i+2] for i in range(len(s)-1)]
+            time_sum = sum([self.time_mtrx[seg[0], seg[1]] for seg in segments])
+            cost_list += [time_sum]
+        return cost_list
     
     
+    # Revised
+    # Re-arrange stops by arrival time
+    def seq_by_arrival(self, seq):
+        
+        arrivals = [] # list of tuples: (truck_id, stop_id, arrival_time)
+        
+        for truck_id, s in enumerate(seq):
+            segments = [s[i:i+2] for i in range(len(s)-1)]
+            eta = [0] + list(np.cumsum([self.time_mtrx[seg[0], seg[1]] for seg in segments]))
+            arrivals += list(zip([truck_id] * len(s), s, eta))
+        
+        arrivals = sorted(arrivals, key = lambda x: x[2])  # sort by arrival time
+        
+        return arrivals
+
+    # revised: generate actions, truck_inv, and station_inv for one iteration
     def gen_actions(self, seq):
-        '''
-        Generate the complete action of one iteration
-        '''
+
         station_inv = self.actual_list.copy()
+        actions = [[] for n in range(self.n_truck)]
+        truck_inv = [[] for n in range(self.n_truck)]
+        seq_ordered = self.seq_by_arrival(seq)
+        diff_curr = self.diff.copy()
         
-        if self.diff[0] < 0:  # pick up
-            actions = [self.diff[0]]
-            truck_inv = [-self.diff[0]]
-            station_inv[0] += self.diff[0]
+        # The first station, station_id = 0
+        if diff_curr[0] < 0:
+            #loc_diff = self.diff[0]
+            for i in range(self.n_truck):
+                to_pickup = max(diff_curr[0], -self.C)       # if pick up, assign to truck 0. the rest at station 0, assign to truck 1
+                actions[i] = [to_pickup]
+                truck_inv[i] = [-to_pickup]
+                station_inv[0] += to_pickup
+                diff_curr[0] -= to_pickup
         else:
-            actions = [0]
-            truck_inv = [0]   
+            for i in range(self.n_truck):
+                actions[i] = [0]
+                truck_inv[i] = [0]
         
-        for s in seq[1:-1]:
-            if self.diff[s] < 0: # pick up, to_pickup < 0
-                # to_pickup 是负数，
-                to_pickup = max(self.diff[s], truck_inv[-1]-self.C) 
-                actions += [to_pickup]
-                truck_inv += [truck_inv[-1] - to_pickup]
-                station_inv[s] += to_pickup
-            elif self.diff[s] > 0:  # drop off
-                to_dropoff = min(self.diff[s], truck_inv[-1])
-                actions += [to_dropoff]
-                truck_inv += [truck_inv[-1] - to_dropoff]
-                station_inv[s] += to_dropoff
+        #seq_ordered_non_0 = [s for s in seq_ordered if s[1] != 0]  # remove the start and the end
+        start_tuples = [(n, 0, 0) for n in range(self.n_truck)]
+        seq_ordered_non_0 = [s for s in seq_ordered if s not in start_tuples]
         
+        for truck, stop, _ in seq_ordered_non_0:
+            
+            # calculate action
+            if diff_curr[stop] < 0:    # pick up, to_pickup < 0
+                to_change = max(diff_curr[stop], truck_inv[truck][-1]-self.C) 
+                
+            elif diff_curr[stop] > 0:  # drop off
+                to_change = min(diff_curr[stop], truck_inv[truck][-1])
+            else:                      # no action needed
+                to_change = 0
+                
+            actions[truck] += [to_change]
+            truck_inv[truck] += [truck_inv[truck][-1] - to_change]
+            station_inv[stop] += to_change
+            diff_curr[stop] -= to_change
+        
+        """
         # the last stop, station_id = 0
-        if self.diff[0] < 0:
-            actions += [0]
-            truck_inv += [truck_inv[-1]]
+        if diff_curr[0] <= 0:   # pick up
+            for i in range(self.n_truck):
+                actions[i] += [0]    # already taken care of in the beginning. Do nothing.
+                truck_inv[i] += [truck_inv[i][-1]]
         else:
-            to_dropoff = min(self.diff[0], truck_inv[-1])
-            actions += [to_dropoff]
-            truck_inv += [truck_inv[-1] - to_dropoff]
-            station_inv[0] += to_dropoff
-        
-        # station_inv 每次只变化一个？
+            #loc_diff = self.diff[0]
+            for i in range(self.n_truck):
+                to_dropoff = min(diff_curr[0], truck_inv[i][-1])
+                actions[i] += [to_dropoff]
+                truck_inv[i] += [truck_inv[i][-1] - to_dropoff]
+                station_inv[0] += to_dropoff
+                diff_curr[0] -= to_dropoff
+        """
         
         return actions, truck_inv, station_inv
     
     
+    # revised
     def objective(self, seq):
+        
         actions, _, station_inv = self.gen_actions(seq)
         
         obj = abs(np.array(station_inv) - np.array(self.expected_list)).sum()
         
+        actions_during_trip = chain(*[a[1:-1] for a in actions])  # chop off the start and the end
         if self.punish_do_nothing:
-            do_nothing = any([x == 0 for x in actions[1:-1]])
-            # Q4: Maximize objective function -=?
+            do_nothing = any([x == 0 for x in actions_during_trip])
             obj += do_nothing * self.do_nothing_punishment
         
         return obj
         
-    
+    # revised
     def gen_init_seq(self):
         # get a list of stations that needs to be picked up
-        need_pickup = np.where(np.array(self.p_action[1:]) == -1)[0]
-        return [0] + [r.choice(need_pickup)] + [0]
-    
-    
-    def permute_seq(self, seq, perm):
+        # if there's pickup to be done, assign to Truck 1
+        need_pickup = set(np.where(np.array(self.p_action[1:]) == -1)[0] + 1)
         
-        seq_new = seq.copy()
+        if self.p_action[0] == 0: # the first stop needs drop off
+            selected_stops = choice(list(need_pickup), self.n_truck, replace = False)
+            routes = [[0] + [stop] + [0] for stop in selected_stops]
+        else:
+            selected_stops = choice(list(need_pickup), self.n_truck-1, replace = False)
+            routes = [[0] + [stop] + [0] for stop in selected_stops]
+            eligible_stops_left = set(range(1, self.N)).difference(selected_stops)
+            select_stop_1st_truck = choice(list(eligible_stops_left), 1)[0]
+            routes = [[0] + [select_stop_1st_truck] + [0]] + routes
+            
+        #print(routes)
+        return routes
+
+
+    def permute_seq(self, seq, perm, stops_to_add = None, truck_to_remove = None, debug=False):
+        
+        seq_new = seq[:]
         
         if perm == "insert":
-            stops_to_add = list(set(range(self.N)).difference(set(seq)))
-            pos_to_add = range(1,len(seq))
-            pos, stop = r.choice(pos_to_add), r.choice(stops_to_add)
-            seq_new = seq_new[:pos] + [stop] + seq_new[pos:]
+            
+            if self.multi_visit:
+                stop, truck, pos, seq_new = self.insert_stop_multivisit(seq_new, stops_to_add)
+            else:
+                stops_visited = set(chain(*seq_new))
+                stops_to_add = list(set(range(self.N)).difference(stops_visited))
+                stop = choice(stops_to_add)
+                truck = choice(range(self.n_truck))
+                pos_to_add = range(1,len(seq_new[truck]))
+                pos = choice(pos_to_add) # add before it
+                seq_new[truck] = seq_new[truck][:pos] + [stop] + seq_new[truck][pos:]
+                
+            if debug: print("Insert: truck - {}, pos - {}, stop - {}".format(truck, pos, stop))
+            
+            
         elif perm == "remove":
-            stops_to_remove = list(set(seq).difference({0}))
-            pos_to_remove = range(1, len(seq)-1)
-            # Q: 这个部分好像和stop没有关系吧？只randomize position应该可以
-            pos, stop = r.choice(pos_to_remove), r.choice(stops_to_remove)
-            seq_new = seq_new[:pos] + seq_new[pos+1:]
+            if truck_to_remove:
+                truck = truck_to_remove
+            else:
+                remove_eligible = [i for i in range(self.n_truck) if len(seq[i]) > 3]
+                truck = choice(remove_eligible)
+            pos_to_remove = range(1, len(seq_new[truck])-1)
+            pos = choice(pos_to_remove)
+            seq_new[truck] = seq_new[truck][:pos] + seq_new[truck][pos+1:]
+            seq_new[truck] = [x[0] for x in groupby(seq_new[truck])]
+            if debug: print("Remove: truck - {}, pos - {}".format(truck, pos))
+            
         elif perm == "swap":
-            pos_to_swap = range(1, len(seq)-1)
-            pos1, pos2 = sorted(r.sample(pos_to_swap, 2))
-            seq_new = seq_new[:pos1] + [seq_new[pos2]] + seq_new[pos1+1:pos2] + [seq_new[pos1]] + seq_new[pos2+1:]
+            #same_route_swap_ineligible = [i for i in range(self.n_truck) if len(seq[i]) < 4]
+            same_route_swap_ineligible = np.where(np.array([len(s) for s in seq]) < 4)[0]
+            # Select trucks
+            if len(same_route_swap_ineligible) == 0:  # if all trucks are eligible for same-route swap
+                truck1, truck2 = choice(range(self.n_truck), 2, replace = True)  # sample w/ replacement from all trucks
+            else:
+                truck1 = choice(range(self.n_truck))
+                truck2_eligible = set(range(self.n_truck)).difference(set(same_route_swap_ineligible))
+                truck2 = choice(list(truck2_eligible))
+            # Select stops
+            if self.multi_visit:
+                pos1 = choice(range(1, len(seq_new[truck1])-1))
+                pos2_eligible = np.where(np.array(seq_new[truck2][1:-1]) != seq_new[truck1][pos1])[0]+1
+                pos2 = choice(pos2_eligible)
+                
+            else:
+                if truck1 == truck2:
+                    pos_to_swap = range(1, len(seq_new[truck1])-1)
+                    pos1, pos2 = sorted(choice(pos_to_swap, 2, replace = False))
+                    #seq_new[truck1] = seq_new[truck1][:pos1] + [seq_new[truck1][pos2]] + seq_new[truck1][pos1+1:pos2] \
+                    #                  + [seq_new[truck1][pos1]] + seq_new[truck1][pos2+1:]
+                else:
+                    pos1 = choice(range(1, len(seq_new[truck1])-1))
+                    pos2 = choice(range(1, len(seq_new[truck2])-1))
+               
+            stop1, stop2 = seq_new[truck1][pos1], seq_new[truck2][pos2]
+            seq_new[truck1] = seq_new[truck1][:pos1] + [stop2] + seq_new[truck1][pos1+1:]
+            seq_new[truck2] = seq_new[truck2][:pos2] + [stop1] + seq_new[truck2][pos2+1:]
+            if self.multi_visit: 
+                seq_new[truck1] = [x[0] for x in groupby(seq_new[truck1])]
+                seq_new[truck2] = [x[0] for x in groupby(seq_new[truck2])]
+            if debug: print("Swap: (truck, pos) 1 - {}, 2 - {}".format((truck1, pos1), (truck2, pos2)))
+            
         elif perm == "revert":
-            pos_to_revert = range(1, len(seq_new)-1)
-            pos1, pos2 = sorted(r.sample(pos_to_revert, 2))
-            seq_new = seq_new[:pos1] + seq_new[pos1:pos2+1][::-1] + seq_new[pos2+1:]
+            same_route_swap_ineligible = [i for i in range(self.n_truck) if len(seq[i]) < 4]
+            truck_eligible = set(range(self.n_truck)).difference(set(same_route_swap_ineligible))
+            truck = choice(list(truck_eligible))
+            pos_to_revert = range(1, len(seq_new[truck])-1)
+            pos1, pos2 = sorted(choice(pos_to_revert, 2, replace = False))
+            seq_new[truck] = seq[truck][:pos1] + seq[truck][pos1:pos2+1][::-1] + seq[truck][pos2+1:]
+            if self.multi_visit: seq_new[truck] = [x[0] for x in groupby(seq_new[truck])]
+            if debug: print("Revert: truck - {}, pos - {}".format(truck, [pos1, pos2]))
+       
         else:
             raise ValueError("Illegal permutation. 4 legal permutations include 'insert', 'remove', 'swap', and 'revert'.")
-        
+            
         return seq_new
     
     
-    def gen_new_seq(self, seq):
+    def insert_stop_multivisit(self, seq, stops_to_add):
+        seq_new = seq[:]
+        shuffle(stops_to_add)
+        for stop in stops_to_add:
+            pos_to_add = [np.where((np.array(s)!=stop) & (np.array([0] + s[:-1])!=stop))[0][1:] for s in seq]
+            truck_to_choose = np.where(np.array([len(p) for p in pos_to_add]) > 0)[0]
+            if len(truck_to_choose) > 0:
+                truck = choice(truck_to_choose)
+                pos = choice(pos_to_add[truck])
+                seq_new[truck] = seq_new[truck][:pos] + [stop] + seq_new[truck][pos:]
+                break
+        return stop, truck, pos, seq_new
+    
+    
+    
+    
+    def gen_new_seq(self, seq, debug=False):
+        
+        stops_visited = list(chain(*seq))
+        cost_list = self.cost(seq)
+        truck_to_remove = None
+        stops_to_add = None
+        
+        if self.multi_visit:
+            actions, truck_inv, station_inv = self.gen_actions(seq)
+            diff = np.array(self.expected_list) - np.array(station_inv)
+            ineligible_stops = {0}
+            # avoid situation: add 2 to [[0,2,0], [0,2,0]]
+            if len(list(chain(*seq))) == 3 * self.n_truck:
+                stop_between = set(np.array(seq)[:,1])
+                if len(stop_between) == 1:
+                    ineligible_stops = ineligible_stops.union(stop_between)
+            stops_to_add = list(set(np.where(np.array(diff) != 0)[0]).difference(ineligible_stops))
+            demand_left_bool = (len(stops_to_add) > 0) & (not all(diff > 0)) & (not all(diff < 0))
+        else:
+            demand_left_bool = None # not used if self.multi_visit = False
         
         # Decide on candidate permutations to perform
-        # 跑不完的不去penalize么？
-        if self.cost(seq) > self.time_limit:
+        # exceed max time -> do not add
+        if max(cost_list) > self.time_limit:
+            # Arguably, a solution exceeding the time_limit wouldn't be output at the first place
             candidate_perm = ['remove', 'swap', 'revert']
-        # 新generate的seq会不会出现跑不完的情况？
-        elif len(seq) - 1 == self.N:
+            truck_to_remove = np.where(np.array(cost_list) > self.time_limit)[0]
+            if len(truck_to_remove) > 0:
+                truck_to_remove = truck_to_remove[0]  # remove one at a time
+                
+        # single visit + all stops included -> then don't add or remove
+        elif (~self.multi_visit) & (len(set(stops_visited)) == self.N):
             candidate_perm = ['swap', 'revert']
-        elif len(seq)-2 == 1:
+        # multi visit + no demand left --> don't add or remove
+        elif self.multi_visit & (not demand_left_bool):
+                candidate_perm = ['swap', 'revert']
+            
+        # each route only has one stop --> do not remove, swap, or remove
+        elif len(stops_visited) == self.n_truck * 3:
             candidate_perm = ['insert']
+            
+        # otherwise, all permutations and legal
         else:
             candidate_perm = ['insert', 'remove', 'swap', 'revert']
         
-        # Check constraints
+        if debug:
+            if self.multi_visit:
+                print("diff: {}, demand_left_bool: {}, candidate_perm: {}, time: {}".format(diff, demand_left_bool, candidate_perm, max(cost_list)))
+            else:
+                print("candidate_perm: {}, time: {}".format(candidate_perm, max(cost_list)))
+        
         keep_searching = True
         
         while keep_searching:
-            rand_perm = r.choice(candidate_perm)
-            # 改action
-            seq_new = self.permute_seq(seq, rand_perm)
-            if self.cost(seq_new) < self.time_limit:
+            rand_perm = choice(candidate_perm)
+            if debug: print("perm: {}".format(rand_perm))
+            seq_new = self.permute_seq(seq, rand_perm, stops_to_add=stops_to_add, truck_to_remove=truck_to_remove)
+            # Check constraints
+            if max(self.cost(seq_new)) < self.time_limit:
                 keep_searching = False
-        
+              
         return seq_new
     
     #@time_it
@@ -249,15 +417,17 @@ class SA():
             obj_curr = self.objective(seq_curr)
             obj_new = self.objective(seq_new)
             
+            # Update the local solution
             if obj_curr <= obj_new:# maximize？
                 seq_curr = seq_new
                 obj_curr = obj_new
             elif r.uniform(0, 1) < np.exp(-(obj_new - obj_curr) / (self.K + self.temp)):
                 seq_curr = seq_new
                 obj_curr = obj_new
-                
-            if obj_curr < obj_best:
-                # Q2: obj_curr > obj_best?
+            
+            # Update the best solution
+            if (obj_curr < obj_best) | \
+                ((obj_curr == obj_best) & (max(self.cost(seq_curr)) < max(self.cost(seq_best)))):
                 obj_best = obj_curr
                 seq_best = seq_curr
                 i_tol = 0
@@ -280,34 +450,44 @@ class SA():
                 print("Round - {}, Temp - {}, Route - {}, Obj - {}".format(i, self.temp, seq_curr, obj_curr))
         
         # Record
-        self.route = seq_best
         self.redist_obj = obj_best
-        self.actions, self.truck_inventory, self.station_inventory = self.gen_actions(self.route)
+        self.actions, self.truck_inventory, self.station_inventory = self.gen_actions(seq_best)
+        self.route = seq_best
+        for truck in range(self.n_truck):
+            stops_w_actions = [True] + list(np.array(self.actions[truck][1:-1]) != 0) + [True]
+            self.route[truck] = list(np.array(self.route[truck])[stops_w_actions])
+            self.actions[truck] = list(np.array(self.actions[truck])[stops_w_actions])
+            self.truck_inventory[truck] = list(np.array(self.truck_inventory[truck])[stops_w_actions])
+
         if self.track_progress:
             self.progress = pd.DataFrame.from_dict(self.progress)
     
     
     def output_solution(self, verbose=True):
         
-        route_ = [self.ind_to_stop[i] for i in self.route]
+        route_ = [[self.ind_to_stop[r] for r in route] for route in self.route]
+        route_redist = [[self.station_inventory[r] for r in route] for route in self.route]
         
-        route_redist = [self.station_inventory[x] for x in self.route]
-        if (self.action[0] != 0) | (self.action[-1] != 0):
-            if self.actions[0] == 0:
-                route_redist[0] = np.nan
-            else:
-                route_redist[-1] = np.nan
+        for truck in range(self.n_truck):
+            if (self.actions[truck][0] != 0) | (self.actions[truck][-1] != 0):
+                if self.actions[truck][0] == 0:
+                    route_redist[truck][0] = np.nan
+                else:
+                    route_redist[truck][-1] = np.nan
+        
+        sol = {}
+        for truck in range(self.n_truck):
+            sol[truck] = pd.DataFrame({"stop": route_[truck],
+                               "action": self.actions[truck],
+                               "truck_inv": self.truck_inventory[truck],
+                               "actual": [self.actual_list_raw[i] for i in route_[truck]],
+                               "expected": [self.expected_list_raw[i] for i in route_[truck]], 
+                               "redist": route_redist[truck]
+                               })
             
-        sol = pd.DataFrame({"stop": route_,
-                           "action": self.actions,
-                           "truck_inv": self.truck_inventory,
-                           "actual": [self.actual_list_raw[i] for i in route_],
-                           "expected": [self.expected_list_raw[i] for i in route_], 
-                           "redist": route_redist
-                           })
         redist = [self.station_inventory[self.ind_to_stop.index(x)] if x in self.ind_to_stop \
                       else self.actual_list_raw[x] for x in range(len(self.actual_list_raw))]
-            
+        
         inv = pd.DataFrame({'stop': range(len(self.actual_list_raw)),
                             'actual': self.actual_list_raw,
                            'expected': self.expected_list_raw,
@@ -316,20 +496,23 @@ class SA():
                            })
         output = {'iterations': self.progress.shape[0],
                 'unsatisfied_customers': self.redist_obj,
-                'time': self.cost(self.route),
+                'time': max(self.cost(self.route)),
                 'route_df': sol,
                 'station_inv_df': inv}
         
         if verbose:
             print("Iterations: {}.".format(self.progress.shape[0]))
-            action_type = ['+' + str(x) if x > 0 else str(x) for x in self.actions]
-            action_seq = ' --> '.join(['0'] + [str(x) + ' (' + y + ')' for x, y in zip(route_, action_type)][1:-1] + ['0'])
-            print("Route: {}".format(action_seq))
-            print("Objective(unsatisfied customer): {}".format(self.redist_obj))
+            print("Objective(unsatisfied customers): {}".format(self.redist_obj))
             print("Time: {}".format(output['time']))
+            action_type = [['+' + str(x) if x > 0 else str(x) for x in actions] for actions in self.actions]
+            for truck in range(self.n_truck):
+                action_seq = ' --> '.join([str(x) + ' (' + y + ')' for x, y in zip(route_[truck], action_type[truck])])
+                print("\nTruck {}: {}".format(truck, action_seq))
             
             print("\nROUTE")
-            print(output['route_df'])
+            for truck in range(self.n_truck):
+                print("Truck {}:".format(truck))
+                print(output['route_df'][truck])
             
             print("\nSTATION INVENTORY")
             print(output['station_inv_df'])

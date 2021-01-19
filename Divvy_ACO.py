@@ -30,6 +30,7 @@ class Ant_Colony(object):
                  #start_together = True,
                  pick_up_init_station = True,
                  return_init_station = True,
+                 specify_final_station = True,
                  start_station=0, 
                  final_station = None,
                  num_truck = 1,
@@ -48,6 +49,8 @@ class Ant_Colony(object):
             n_iterations: number of iterations run before it concludes on the best route
             demand(1d numpy.array): number of bikes demand at the dock, negative is demand, positive is surplus(overload)
             capacity(int): truck capacity
+            final_station(int): specify the station it returns to
+            specify_return_station(bool): whether we need to return to a specific station
             multiple_visits(bool): does the algorithms allows for multiple visits to a single station
             ant_colony = Ant_Colony(time_matrix, 100, 20, 2000, 0.95, demand = demand, alpha=1, beta=2)          
         """
@@ -71,6 +74,7 @@ class Ant_Colony(object):
         self.multiple_visits = multiple_visits
         self.pick_up_init_station = pick_up_init_station
         self.return_init_station = return_init_station
+        self.specify_final_station = specify_final_station
         #self.start_together = start_together 
         self.all_time_best_path = ("placeholder", np.inf,[0], [0], [0], self.demand,[0],[0])
 
@@ -220,6 +224,9 @@ class Ant_Colony(object):
         demand = deepcopy(self.demand)
         time_constraint = deepcopy(self.time_constraint)
         
+        # final_station
+        if self.specify_final_station:
+            pass
         if self.return_init_station:
             final = start
         else:
@@ -248,11 +255,9 @@ class Ant_Colony(object):
             if len(truck_time_travel) <1:
                 break
             curr_time = truck_time_travel.pop(0)
+            if curr_time > time_constraint:
+                break
             truck = truck_selected.pop(0)
-            #print('curr_time: ', curr_time)
-            #print('truck: ',truck)
-            #print('ttt',truck_selected)
-            
             this_truck_prev, bikes_on_this_truck = prev[truck], bikes_on_trucks[truck]
             move = self.pick_move(self.pheromone[this_truck_prev], 
                                   self.travel_time[this_truck_prev], 
@@ -261,64 +266,94 @@ class Ant_Colony(object):
                                   demand)
             truck_travel_duration = self.travel_time[this_truck_prev][move]
             #print('move',move)
-            if move ==-1: # end action
-                paths[truck].append((this_truck_prev, final)) # going back to where we started
-                satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
-                satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
-                                                                                                satisfy_on_this_truck, 
-                                                                                                final, 
-                                                                                                demand)
-                satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
-                truck_inv[truck].append(bikes_on_this_truck)
-                bikes_moved[truck].append(bikes)
-                prev[truck] = final
-            # If there is still time to travel to the next station
-            elif time_constraint - curr_time > self.travel_time[this_truck_prev][move]+self.travel_time[move][final]:
-                satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
-                satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
-                                                                                                satisfy_on_this_truck, 
-                                                                                                move, 
-                                                                                                demand)
-                satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
-                truck_inv[truck].append(bikes_on_this_truck)
-                bikes_moved[truck].append(bikes)
-                paths[truck].append((this_truck_prev, move))
-                prev[truck] = move
-                visited.add(move)
-            # this truck go back to the intial station
-            else:
-                paths[truck].append((this_truck_prev, final)) # going back to where we started
-                satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
-                satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
-                                                                                                satisfy_on_this_truck, 
-                                                                                                final, 
-                                                                                                demand)
-                #试一下 don't actually need it
-                satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
-                truck_inv[truck].append(bikes_on_this_truck)
-                bikes_moved[truck].append(bikes)
-                prev[truck] = final
-                
-            #print('final',truck_time_travel)
-            #print(truck_selected)
-            #print(prev[truck])
-            #print('truck', truck)
             
             
-            if prev[truck] != final:
-                next_travel_time = truck_travel_duration+curr_time
-                for i in range(len(truck_time_travel)):
-                    if truck_time_travel[i] > next_travel_time:
-                        truck_time_travel.insert(i,next_travel_time)
-                        truck_selected.insert(i,truck)
-                if len(truck_time_travel) ==0:
-                    truck_time_travel.append(next_travel_time)
-                    truck_selected.append(truck)
-                elif truck_time_travel[len(truck_time_travel)-1] < next_travel_time:
-                    truck_time_travel.insert(len(truck_time_travel)+1,next_travel_time)
-                    truck_selected.insert(len(truck_selected)+1,truck)
-                #print('final truck time',truck_time_travel)
-                #print(truck_selected)
+            # if we need to return to a specific final station
+            if self.specify_final_station:
+                if move ==-1: # All demands have been satisfied
+                    paths[truck].append((this_truck_prev, final)) # going back to where we started
+                    satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                    satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                    satisfy_on_this_truck, 
+                                                                                                    final, 
+                                                                                                    demand)
+                    satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                    truck_inv[truck].append(bikes_on_this_truck)
+                    bikes_moved[truck].append(bikes)
+                    prev[truck] = final
+                # If there is still time to travel to the next station
+                elif time_constraint - curr_time > self.travel_time[this_truck_prev][move]+self.travel_time[move][final]:
+                    satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                    satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                    satisfy_on_this_truck, 
+                                                                                                    move, 
+                                                                                                    demand)
+                    satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                    truck_inv[truck].append(bikes_on_this_truck)
+                    bikes_moved[truck].append(bikes)
+                    paths[truck].append((this_truck_prev, move))
+                    prev[truck] = move
+                    visited.add(move)
+                # this truck go back to the intial station
+                else:
+                    paths[truck].append((this_truck_prev, final)) # going back to where we started
+                    satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                    satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                    satisfy_on_this_truck, 
+                                                                                                    final, 
+                                                                                                    demand)
+                    #试一下 don't actually need it
+                    satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                    truck_inv[truck].append(bikes_on_this_truck)
+                    bikes_moved[truck].append(bikes)
+                    prev[truck] = final
 
+                if prev[truck] != final:
+                    next_travel_time = truck_travel_duration+curr_time
+                    for i in range(len(truck_time_travel)):
+                        if truck_time_travel[i] > next_travel_time:
+                            truck_time_travel.insert(i,next_travel_time)
+                            truck_selected.insert(i,truck)
+                    if len(truck_time_travel) ==0:
+                        truck_time_travel.append(next_travel_time)
+                        truck_selected.append(truck)
+                    elif truck_time_travel[len(truck_time_travel)-1] < next_travel_time:
+                        truck_time_travel.insert(len(truck_time_travel)+1,next_travel_time)
+                        truck_selected.insert(len(truck_selected)+1,truck)
+                    #print('final truck time',truck_time_travel)
+                    #print(truck_selected)
+                    
+            # Don't need to return to a specific station
+            else:
+                if move ==-1: # All demands have been satisfied
+                    break
+                # If there is still time to travel to the next station
+                elif time_constraint - curr_time > self.travel_time[this_truck_prev][move]:
+                    satisfy_on_this_truck, bikes_on_this_truck = satisfy[truck], bikes_on_trucks[truck]
+                    satisfy_on_this_truck, bikes_on_this_truck, demand, bikes = self.update_vehicle(bikes_on_this_truck, 
+                                                                                                    satisfy_on_this_truck, 
+                                                                                                    move, 
+                                                                                                    demand)
+                    satisfy[truck], bikes_on_trucks[truck] = satisfy_on_this_truck, bikes_on_this_truck
+                    truck_inv[truck].append(bikes_on_this_truck)
+                    bikes_moved[truck].append(bikes)
+                    paths[truck].append((this_truck_prev, move))
+                    prev[truck] = move
+                    visited.add(move)
+
+
+                    # Find the next travel time
+                    next_travel_time = truck_travel_duration+curr_time
+                    for i in range(len(truck_time_travel)):
+                        if truck_time_travel[i] > next_travel_time:
+                            truck_time_travel.insert(i,next_travel_time)
+                            truck_selected.insert(i,truck)
+                    if len(truck_time_travel) ==0:
+                        truck_time_travel.append(next_travel_time)
+                        truck_selected.append(truck)
+                    elif truck_time_travel[len(truck_time_travel)-1] < next_travel_time:
+                        truck_time_travel.insert(len(truck_time_travel)+1,next_travel_time)
+                        truck_selected.insert(len(truck_selected)+1,truck)
+                
         return paths, satisfy, bikes_on_trucks, demand, bikes_moved, truck_inv
     

@@ -42,8 +42,7 @@ class SA():
                  n_truck,
                  time_mtrx, 
                  actual_list, 
-                 expected_list, 
-                 station_capacity, 
+                 expected_list,
                  truck_capacity, 
                  time_limit = 1000,
                  temp_schedule=100, 
@@ -75,11 +74,10 @@ class SA():
         self.debug = debug
         
         # Problem constants
-        self.ind_to_stop, self.actual_list, self.expected_list, self.time_mtrx, self.station_capacity \
-            = self.preprocess_constants(actual_list, expected_list, time_mtrx, station_capacity)
+        self.ind_to_stop, self.actual_list, self.expected_list, self.time_mtrx \
+            = self.preprocess_constants(actual_list, expected_list, time_mtrx)
         self.actual_list_raw = actual_list
         self.expected_list_raw = expected_list
-        self.station_capacity_raw = station_capacity
         self.C = truck_capacity
         self.time_limit = time_limit
         
@@ -93,11 +91,7 @@ class SA():
         self.diff = list(np.array(self.expected_list) - np.array(self.actual_list))
         
         # Sanity check on problem definition
-        if any([x[0] > x[1] for x in zip(self.actual_list, self.station_capacity)]):
-            raise ProblemDefinitionError("Actual # bikes at stations exceeds capacity.")
-        elif any([x[0] > x[1] for x in zip(self.expected_list, self.station_capacity)]):
-            raise ProblemDefinitionError("Expected # bikes at stations exceeds capacity.")
-        elif all([x == 0 for x in self.diff]):
+        if all([x == 0 for x in self.diff]):
             raise ProblemDefinitionError("No re-distribution is needed.")
         elif all([x >= 0 for x in self.diff]):
             raise ProblemDefinitionError("Net bike deficit.")
@@ -106,27 +100,47 @@ class SA():
     
     
     # Remove stops w/o the need of rebalancing
-    def preprocess_constants(self, actual_list, expected_list, time_mtrx, station_capacity):
+    def preprocess_constants(self, actual_list, expected_list, time_mtrx):
         ind_to_opt = [0] + list(np.where(np.array(actual_list)[1:] != np.array(expected_list)[1:])[0]+1)
         ind_to_stop = list(itemgetter(*ind_to_opt)(list(range(len(actual_list)))))
         actual_adj = list(itemgetter(*ind_to_opt)(actual_list))
         expected_adj = list(itemgetter(*ind_to_opt)(expected_list))
         time_mtrx_adj = time_mtrx[ind_to_opt,:][:,ind_to_opt]
-        station_cap_adj = list(itemgetter(*ind_to_opt)(station_capacity))
-        return ind_to_stop, actual_adj, expected_adj, time_mtrx_adj, station_cap_adj
+        return ind_to_stop, actual_adj, expected_adj, time_mtrx_adj
     
+    
+    def objective(self, seq):  # unsatisfied requests
+        
+        actions, _, station_inv = self.gen_actions(seq)
+        
+        obj = abs(np.array(station_inv) - np.array(self.expected_list)).sum()
+        
+        actions_during_trip = chain(*[a[1:-1] for a in actions])  # chop off the start and the end
+        if self.punish_do_nothing:
+            do_nothing = any([x == 0 for x in actions_during_trip])
+            obj += do_nothing * self.do_nothing_punishment
+        
+        return obj, actions
     
     # Calculate total time of the route
-    def cost(self, seq):
+    def cost(self, seq, actions=None):
+        
+        seq_new = seq[:]
+        
+        # if actions are given, remove non-action stops
+        if actions:
+            for truck in range(self.n_truck):
+                stops_w_actions = [True] + list(np.array(actions[truck][1:-1]) != 0) + [True]
+                seq_new[truck] = list(np.array(seq[truck])[stops_w_actions])
+        
         cost_list = []
-        for s in seq:
+        for s in seq_new:
             segments = [s[i:i+2] for i in range(len(s)-1)]
             time_sum = sum([self.time_mtrx[seg[0], seg[1]] for seg in segments])
             cost_list += [time_sum]
         return cost_list
     
     
-    # Revised
     # Re-arrange stops by arrival time
     def seq_by_arrival(self, seq):
         
@@ -184,40 +198,9 @@ class SA():
             station_inv[stop] += to_change
             diff_curr[stop] -= to_change
         
-        """
-        # the last stop, station_id = 0
-        if diff_curr[0] <= 0:   # pick up
-            for i in range(self.n_truck):
-                actions[i] += [0]    # already taken care of in the beginning. Do nothing.
-                truck_inv[i] += [truck_inv[i][-1]]
-        else:
-            #loc_diff = self.diff[0]
-            for i in range(self.n_truck):
-                to_dropoff = min(diff_curr[0], truck_inv[i][-1])
-                actions[i] += [to_dropoff]
-                truck_inv[i] += [truck_inv[i][-1] - to_dropoff]
-                station_inv[0] += to_dropoff
-                diff_curr[0] -= to_dropoff
-        """
-        
         return actions, truck_inv, station_inv
     
-    
-    # revised
-    def objective(self, seq):
         
-        actions, _, station_inv = self.gen_actions(seq)
-        
-        obj = abs(np.array(station_inv) - np.array(self.expected_list)).sum()
-        
-        actions_during_trip = chain(*[a[1:-1] for a in actions])  # chop off the start and the end
-        if self.punish_do_nothing:
-            do_nothing = any([x == 0 for x in actions_during_trip])
-            obj += do_nothing * self.do_nothing_punishment
-        
-        return obj
-        
-    # revised
     def gen_init_seq(self):
         # get a list of stations that needs to be picked up
         # if there's pickup to be done, assign to Truck 1
@@ -233,7 +216,6 @@ class SA():
             select_stop_1st_truck = choice(list(eligible_stops_left), 1)[0]
             routes = [[0] + [select_stop_1st_truck] + [0]] + routes
             
-        #print(routes)
         return routes
 
 
@@ -242,7 +224,6 @@ class SA():
         seq_new = seq[:]
         
         if perm == "insert":
-            
             if self.multi_visit:
                 stop, truck, pos, seq_new = self.insert_stop_multivisit(seq_new, stops_to_add)
             else:
@@ -263,54 +244,57 @@ class SA():
             else:
                 remove_eligible = [i for i in range(self.n_truck) if len(seq[i]) > 3]
                 truck = choice(remove_eligible)
-            pos_to_remove = range(1, len(seq_new[truck])-1)
-            pos = choice(pos_to_remove)
+                
+            if self.multi_visit:
+                pos = self.remove_stop_multivisit(seq, truck)
+            else:
+                pos_to_remove = range(1, len(seq_new[truck])-1)
+                pos = choice(pos_to_remove)
             seq_new[truck] = seq_new[truck][:pos] + seq_new[truck][pos+1:]
-            seq_new[truck] = [x[0] for x in groupby(seq_new[truck])]
+            #seq_new[truck] = [x[0] for x in groupby(seq_new[truck])]
             if debug: print("Remove: truck - {}, pos - {}".format(truck, pos))
             
         elif perm == "swap":
-            #same_route_swap_ineligible = [i for i in range(self.n_truck) if len(seq[i]) < 4]
-            same_route_swap_ineligible = np.where(np.array([len(s) for s in seq]) < 4)[0]
-            # Select trucks
-            if len(same_route_swap_ineligible) == 0:  # if all trucks are eligible for same-route swap
-                truck1, truck2 = choice(range(self.n_truck), 2, replace = True)  # sample w/ replacement from all trucks
-            else:
-                truck1 = choice(range(self.n_truck))
-                truck2_eligible = set(range(self.n_truck)).difference(set(same_route_swap_ineligible))
-                truck2 = choice(list(truck2_eligible))
-            # Select stops
+            
             if self.multi_visit:
-                pos1 = choice(range(1, len(seq_new[truck1])-1))
-                pos2_eligible = np.where(np.array(seq_new[truck2][1:-1]) != seq_new[truck1][pos1])[0]+1
-                pos2 = choice(pos2_eligible)
-                
+                truck1, pos1, truck2, pos2 = self.swap_stops_multivisit(seq)
             else:
+                # Select trucks
+                same_route_swap_ineligible = np.where(np.array([len(s) for s in seq]) < 4)[0]
+                if len(same_route_swap_ineligible) == 0:  # if all trucks are eligible for same-route swap
+                    truck1, truck2 = choice(range(self.n_truck), 2, replace = True)  # sample w/ replacement from all trucks
+                else:
+                    truck1 = choice(range(self.n_truck))
+                    truck2_eligible = set(range(self.n_truck)).difference(set(same_route_swap_ineligible))
+                    truck2 = choice(list(truck2_eligible))
+                # Select stops
                 if truck1 == truck2:
                     pos_to_swap = range(1, len(seq_new[truck1])-1)
                     pos1, pos2 = sorted(choice(pos_to_swap, 2, replace = False))
-                    #seq_new[truck1] = seq_new[truck1][:pos1] + [seq_new[truck1][pos2]] + seq_new[truck1][pos1+1:pos2] \
-                    #                  + [seq_new[truck1][pos1]] + seq_new[truck1][pos2+1:]
                 else:
                     pos1 = choice(range(1, len(seq_new[truck1])-1))
                     pos2 = choice(range(1, len(seq_new[truck2])-1))
                
-            stop1, stop2 = seq_new[truck1][pos1], seq_new[truck2][pos2]
-            seq_new[truck1] = seq_new[truck1][:pos1] + [stop2] + seq_new[truck1][pos1+1:]
-            seq_new[truck2] = seq_new[truck2][:pos2] + [stop1] + seq_new[truck2][pos2+1:]
-            if self.multi_visit: 
-                seq_new[truck1] = [x[0] for x in groupby(seq_new[truck1])]
-                seq_new[truck2] = [x[0] for x in groupby(seq_new[truck2])]
+            if pos1:
+                stop1, stop2 = seq_new[truck1][pos1], seq_new[truck2][pos2]
+                seq_new[truck1] = seq_new[truck1][:pos1] + [stop2] + seq_new[truck1][pos1+1:]
+                seq_new[truck2] = seq_new[truck2][:pos2] + [stop1] + seq_new[truck2][pos2+1:]
+            #if self.multi_visit: 
+            #    seq_new[truck1] = [x[0] for x in groupby(seq_new[truck1])]
+            #    seq_new[truck2] = [x[0] for x in groupby(seq_new[truck2])]
             if debug: print("Swap: (truck, pos) 1 - {}, 2 - {}".format((truck1, pos1), (truck2, pos2)))
             
         elif perm == "revert":
             same_route_swap_ineligible = [i for i in range(self.n_truck) if len(seq[i]) < 4]
             truck_eligible = set(range(self.n_truck)).difference(set(same_route_swap_ineligible))
             truck = choice(list(truck_eligible))
-            pos_to_revert = range(1, len(seq_new[truck])-1)
-            pos1, pos2 = sorted(choice(pos_to_revert, 2, replace = False))
+            if self.multi_visit:
+                pos1, pos2 = self.revert_stops_multivisit(seq_new, truck)
+            else:
+                pos_to_revert = range(1, len(seq_new[truck])-1)
+                pos1, pos2 = sorted(choice(pos_to_revert, 2, replace = False))
             seq_new[truck] = seq[truck][:pos1] + seq[truck][pos1:pos2+1][::-1] + seq[truck][pos2+1:]
-            if self.multi_visit: seq_new[truck] = [x[0] for x in groupby(seq_new[truck])]
+            #if self.multi_visit: seq_new[truck] = [x[0] for x in groupby(seq_new[truck])]
             if debug: print("Revert: truck - {}, pos - {}".format(truck, [pos1, pos2]))
        
         else:
@@ -332,9 +316,40 @@ class SA():
                 break
         return stop, truck, pos, seq_new
     
+    def remove_stop_multivisit(self, seq, truck):
+        eligible_pos = [i for i in range(1, len(seq[truck])-1) if seq[truck][i-1] != seq[truck][i+1]]
+        return choice(eligible_pos)
     
+    def revert_stops_multivisit(self, seq, truck):
+        N = len(seq[truck])
+        eligible_pos1 = list(range(1, N-2))  # assume pos1 < pos2
+        shuffle(eligible_pos1)
+        for pos1 in eligible_pos1:
+            eligible_pos2 = range(pos1+1, N-1)
+            eligible_pos2 = [i for i in eligible_pos2 if (seq[truck][i+1] != seq[truck][pos1]) & 
+                                                         (seq[truck][pos1-1] != seq[truck][i])]
+            if len(eligible_pos2) > 0:
+                pos2 = choice(eligible_pos2)
+                return pos1, pos2
     
-    
+    def swap_stops_multivisit(self, seq):
+        truck_list = list(range(self.n_truck))
+        shuffle(truck_list)
+        for truck1 in truck_list:
+            pos1_eligible = list(range(1, len(seq[truck1])-1))
+            shuffle(pos1_eligible)
+            for pos1 in pos1_eligible:
+                pos2_eligible = [[i for i in range(1, len(seq[truck2])-1) 
+                                    if (seq[truck2][i] not in seq[truck1][pos1-1:pos1+2]) &
+                                                                       (seq[truck1][pos1] not in seq[truck2][i-1:i+2])] 
+                                    for truck2 in range(self.n_truck)]
+                truck2_eligible = np.where(np.array([len(x) for x in pos2_eligible]) > 0)[0]
+                if len(truck2_eligible) > 0:
+                    truck2 = choice(truck2_eligible)
+                    pos2 = choice(pos2_eligible[truck2])
+                    return truck1, pos1, truck2, pos2
+        return None, None, None, None
+        
     def gen_new_seq(self, seq, debug=False):
         
         stops_visited = list(chain(*seq))
@@ -380,6 +395,9 @@ class SA():
         else:
             candidate_perm = ['insert', 'remove', 'swap', 'revert']
         
+        if min([len(s) for s in seq]) < 4:
+            candidate_perm = [c for c in candidate_perm if c != 'swap']
+        
         if debug:
             if self.multi_visit:
                 print("diff: {}, demand_left_bool: {}, candidate_perm: {}, time: {}".format(diff, demand_left_bool, candidate_perm, max(cost_list)))
@@ -404,9 +422,10 @@ class SA():
         # only choose initial station for pickup* 
         seq_curr = self.gen_init_seq()
         
-        obj_curr = self.objective(seq_curr)
+        obj_curr, actions_curr = self.objective(seq_curr)
         seq_best = seq_curr.copy()
         obj_best = obj_curr
+        cost_best = self.cost(seq_best, actions_curr)
         i = 0
         i_tol = 0
         
@@ -414,11 +433,11 @@ class SA():
         while (i < self.iter_max) & (i_tol < self.tolerance):
             
             seq_new = self.gen_new_seq(seq_curr)
-            obj_curr = self.objective(seq_curr)
-            obj_new = self.objective(seq_new)
+            #obj_curr, actions_curr = self.objective(seq_curr) # cab be removed?
+            obj_new, actions_new = self.objective(seq_new)
             
             # Update the local solution
-            if obj_curr <= obj_new:# maximize？
+            if obj_new <= obj_curr:  # larger than? trying to minimize this
                 seq_curr = seq_new
                 obj_curr = obj_new
             elif r.uniform(0, 1) < np.exp(-(obj_new - obj_curr) / (self.K + self.temp)):
@@ -426,11 +445,18 @@ class SA():
                 obj_curr = obj_new
             
             # Update the best solution
-            if (obj_curr < obj_best) | \
-                ((obj_curr == obj_best) & (max(self.cost(seq_curr)) < max(self.cost(seq_best)))):
-                obj_best = obj_curr
-                seq_best = seq_curr
+            if obj_new < obj_best:
+                obj_best = obj_new
+                seq_best = seq_new
+                cost_best = self.cost(seq_new, actions_new)
                 i_tol = 0
+            elif obj_new == obj_best:
+                cost_new = self.cost(seq_new, actions_new)
+                if cost_new < cost_best:
+                    obj_best = obj_new
+                    seq_best = seq_new
+                    cost_best = cost_new
+                    i_tol = 0
             else:
                 i_tol += 1
             

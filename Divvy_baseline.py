@@ -11,6 +11,7 @@ Created on Wed Feb 10 22:26:56 2020
 
 from copy import deepcopy
 
+
 class Baseline(object):
 
     def __init__(self,
@@ -51,9 +52,7 @@ class Baseline(object):
         self.satisfy = None
 
     def run(self):
-
         # station related variables
-
         demand = list(deepcopy(self.demand))
         time_constraint = deepcopy(self.time_constraint)
         curr_time = 0
@@ -74,7 +73,7 @@ class Baseline(object):
             if len(truck_time_travel) < 1:
                 break
             curr_time = truck_time_travel.pop(0)
-            print(curr_time)
+            print('current time:', curr_time)
             if curr_time > time_constraint:
                 break
             truck = truck_selected.pop(0)
@@ -88,9 +87,6 @@ class Baseline(object):
             pick_up_max = min(high_bar, capacity - cur_num_bikes) if high_bar > 0 else 0
             drop_off_max = min(-low_bar, cur_num_bikes) if low_bar < 0 else 0
 
-            print(pick_up_max, 'pick up')
-            print(drop_off_max, 'drop off')
-
             if pick_up_max == 0 and drop_off_max == 0:
                 truck_time_travel.append(next_move_time)
                 truck_selected.append(truck)
@@ -99,6 +95,9 @@ class Baseline(object):
                 break
             elif pick_up_max >= drop_off_max:
                 move = demand.index(high_bar)
+                next_move_time = curr_time + self.travel_time[prev][move]
+                if next_move_time > time_constraint:
+                    break
 
                 demand[move] -= pick_up_max
 
@@ -108,13 +107,14 @@ class Baseline(object):
                 paths[truck].append(move)
                 truck_inv[truck].append(bikes_on_trucks[truck])
                 satisfy_record[truck].append(pick_up_max)
-                print('pick up: ', move)
-                next_move_time = curr_time + self.travel_time[prev][move]
-                print('pick up: ', move, next_move_time)
+                print(
+                'truck', truck, 'pick up', pick_up_max, 'bikes at station', move, ';finish time: ', next_move_time)
 
             else:  # pick_up_max < drop_off_max
                 move = demand.index(low_bar)
-
+                next_move_time = curr_time + self.travel_time[prev][move]
+                if next_move_time > time_constraint:
+                    break
                 demand[move] += drop_off_max
 
                 bikes_on_trucks[truck] -= drop_off_max
@@ -124,8 +124,8 @@ class Baseline(object):
                 truck_inv[truck].append(bikes_on_trucks[truck])
                 satisfy_record[truck].append(drop_off_max)
 
-                next_move_time = curr_time + self.travel_time[prev][move]
-                print('drop_off: ', move, next_move_time)
+                print(
+                'truck', truck, 'drop_off', drop_off_max, 'bikes at station', move, ';finish time: ', next_move_time)
             if self.num_trucks == 1:
                 truck_time_travel.append(next_move_time)
                 truck_selected.append(truck)
@@ -136,7 +136,6 @@ class Baseline(object):
                 truck_time_travel.append(next_move_time)
                 truck_selected.append(truck)
             prev = move
-            print('current_time', curr_time)
 
         print(demand)
         self.demand_lst = demand
@@ -152,3 +151,5 @@ class Baseline(object):
         print('demand list: ', self.demand_lst)
         print('paths: ', self.paths)
         print('truck inv', self.truck_inv)
+        print('satisfied customer', sum(self.satisfy))
+        print('end time for trucks', self.truck_time_travel)
